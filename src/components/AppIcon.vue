@@ -1,6 +1,7 @@
 <script setup>
 defineProps({ name: String, size: { type: [Number, String], default: 18 } });
 const paths = {
+  pan: 'M8 13V5a2 2 0 014 0v7M12 7a2 2 0 014 0v5M16 9a2 2 0 014 0v6c0 4-3 6-6 6h-2c-2 0-3-1-4-2l-5-6a2 2 0 012-3l3 3',
   circuit: 'M3 12h4l3-7 4 14 3-7h4M3 8v8M21 8v8',
   cursor: 'M5 3l14 9-7 1-3 7z',
   wire: 'M4 18v-7a4 4 0 014-4h8M14 4l3 3-3 3M4 15v5',

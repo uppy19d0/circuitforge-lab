@@ -1,4 +1,4 @@
-import { holes, holeById, footprint } from '../domain/breadboard.js';
+import { projectBoard, footprint } from '../domain/breadboard.js';
 
 class DisjointSet {
   constructor(keys) {
@@ -15,6 +15,7 @@ class DisjointSet {
 }
 
 export function buildNetlist(project) {
+  const { holes, holeById } = projectBoard(project);
   const sets = new DisjointSet([...new Set(holes.map((hole) => hole.net))]);
   for (const wire of project.wires) {
     const a = holeById[wire.from],
@@ -22,12 +23,12 @@ export function buildNetlist(project) {
     if (a && b) sets.join(a.net, b.net);
   }
   for (const part of project.components.filter((part) => part.type === 'switch' && part.closed)) {
-    const pins = footprint(part);
+    const pins = footprint(part, projectBoard(project));
     if (pins.length === 2) sets.join(pins[0].net, pins[1].net);
   }
   const netByHole = Object.fromEntries(holes.map((hole) => [hole.id, sets.find(hole.net)]));
   const branches = project.components.flatMap((part) => {
-    const pins = footprint(part);
+    const pins = footprint(part, projectBoard(project));
     return pins.length === 2
       ? [{ ...part, a: netByHole[pins[0].id], b: netByHole[pins[1].id] }]
       : [];
@@ -54,7 +55,15 @@ function solveLinear(matrix, values) {
 }
 
 // Educational DC operating-point solver. LEDs use a forward-drop + 10 Ω model.
-// Every source has 0.8 Ω internal resistance, so a short never produces infinity.
+// Sources have finite internal resistance; a short never produces infinity.
+export function resistanceFor(part) {
+  return part.type === 'ldr'
+    ? 100000 * Math.pow(0.005, Math.max(0, Math.min(100, part.light ?? 50)) / 100)
+    : part.value;
+}
+const isResistive = (part) => ['resistor', 'rheostat', 'ldr', 'lamp'].includes(part.type);
+const isJunction = (part) => ['led', 'diode'].includes(part.type);
+
 export function simulateCircuit(project) {
   const { netByHole, branches } = buildNetlist(project);
   const sources = branches.filter((part) => part.type === 'source');
@@ -78,6 +87,7 @@ export function simulateCircuit(project) {
     };
   const source = sources[0];
   const supply = Number(source.value);
+  const internalResistance = source.internalResistance ?? 0.8;
   if (!(supply > 0) || !Number.isFinite(supply))
     return {
       ...empty,
@@ -91,7 +101,7 @@ export function simulateCircuit(project) {
   );
   const index = new Map(nodes.map((node, i) => [node, i]));
   let voltages = {};
-  const active = new Set(branches.filter((part) => part.type === 'led').map((part) => part.uid));
+  const active = new Set(branches.filter(isJunction).map((part) => part.uid));
   for (let iteration = 0; iteration < 30; iteration++) {
     const matrix = nodes.map(() => nodes.map(() => 0));
     const rhs = nodes.map(() => 0);
@@ -113,16 +123,17 @@ export function simulateCircuit(project) {
     };
     // A very small shunt permits floating/dangling branches without fabricated voltages.
     for (let i = 0; i < nodes.length; i++) matrix[i][i] = 1e-12;
-    stamp(source.a, ground, 1 / 0.8, supply);
+    stamp(source.a, ground, 1 / internalResistance, supply);
     for (const part of branches) {
-      if (part.type === 'resistor') stamp(part.a, part.b, 1 / Math.max(0.1, part.value));
-      if (part.type === 'led' && active.has(part.uid)) stamp(part.a, part.b, 1 / 10, part.value);
+      if (isResistive(part)) stamp(part.a, part.b, 1 / Math.max(0.1, resistanceFor(part)));
+      if (isJunction(part) && active.has(part.uid))
+        stamp(part.a, part.b, 1 / (part.dynamicResistance ?? 10), part.value);
     }
     const solution = solveLinear(matrix, rhs);
     voltages = Object.fromEntries(nodes.map((node, i) => [node, solution[i]]));
     voltages[ground] = 0;
     let changed = false;
-    for (const part of branches.filter((part) => part.type === 'led')) {
+    for (const part of branches.filter(isJunction)) {
       const conducts = voltages[part.a] - voltages[part.b] > part.value + 1e-8;
       if (conducts !== active.has(part.uid)) {
         changed = true;
@@ -132,29 +143,29 @@ export function simulateCircuit(project) {
     }
     if (!changed) break;
   }
-  const current = Math.max(0, (supply - (voltages[source.a] || 0)) / 0.8);
+  const current = Math.max(0, (supply - (voltages[source.a] || 0)) / internalResistance);
   const diagnostics = [];
   const parts = Object.fromEntries(
     branches.map((part) => {
       const voltage = (voltages[part.a] || 0) - (voltages[part.b] || 0);
       let amps = 0;
-      if (part.type === 'resistor') amps = voltage / Math.max(0.1, part.value);
-      if (part.type === 'led')
-        amps = active.has(part.uid) ? Math.max(0, (voltage - part.value) / 10) : 0;
+      if (isResistive(part)) amps = voltage / Math.max(0.1, resistanceFor(part));
+      if (isJunction(part))
+        amps = active.has(part.uid)
+          ? Math.max(0, (voltage - part.value) / (part.dynamicResistance ?? 10))
+          : 0;
       if (part.type === 'source') amps = current;
       const power = Math.abs(voltage * amps);
-      const limitExceeded =
-        part.type === 'led'
-          ? amps > part.rating
-          : part.type === 'resistor'
-            ? power > part.rating
-            : part.type === 'source' && amps > part.rating;
-      const critical =
-        part.type === 'led'
-          ? amps > part.rating * 3
-          : part.type === 'resistor'
-            ? power > part.rating * 3
-            : part.type === 'source' && amps > part.rating * 3;
+      const limitExceeded = isJunction(part)
+        ? amps > part.rating
+        : isResistive(part)
+          ? power > part.rating
+          : part.type === 'source' && amps > part.rating;
+      const critical = isJunction(part)
+        ? amps > part.rating * 3
+        : isResistive(part)
+          ? power > part.rating * 3
+          : part.type === 'source' && amps > part.rating * 3;
       const state = critical ? 'danger' : limitExceeded ? 'warn' : 'ok';
       if (limitExceeded)
         diagnostics.push({
@@ -163,7 +174,7 @@ export function simulateCircuit(project) {
           message:
             part.label +
             ': ' +
-            (part.type === 'resistor'
+            (isResistive(part)
               ? 'potencia superior a ' + part.rating + ' W.'
               : 'corriente superior a ' + formatCurrent(part.rating) + '.'),
         });
@@ -175,7 +186,15 @@ export function simulateCircuit(project) {
         });
       return [
         part.uid,
-        { voltage, current: amps, power, state, on: part.type === 'led' && amps > 0.0001 },
+        {
+          voltage,
+          current: amps,
+          power,
+          state,
+          on: ['led', 'lamp'].includes(part.type) && Math.abs(amps) > 0.0001,
+          brightness:
+            part.type === 'lamp' ? Math.min(1, power / 0.6) : Math.min(1, Math.max(0, amps) / 0.02),
+        },
       ];
     }),
   );

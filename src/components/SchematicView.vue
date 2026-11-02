@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue';
-import { buildNetlist, formatCurrent, formatVoltage } from '../engine/simulator';
+import { buildNetlist, formatCurrent, formatVoltage, resistanceFor } from '../engine/simulator';
 const props = defineProps({ project: Object, result: Object, selectedUid: String });
 defineEmits(['select']);
 const graph = computed(() => {
@@ -80,19 +80,29 @@ function placement(part) {
           :stroke="selectedUid === part.uid ? '#4e9b87' : 'none'"
         />
         <path
-          v-if="part.type === 'resistor'"
+          v-if="['resistor', 'rheostat', 'ldr'].includes(part.type)"
           d="M-32 0h8l4-8 8 16 8-16 8 16 8-16 8 16 4-8h8"
           fill="none"
           stroke="currentColor"
           stroke-width="2"
         />
-        <g v-else-if="part.type === 'led'" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M-30 0h16M-14-13L12 0-14 13ZM12-14v28M12 0h18M0-20l12-12M12-20l12-12" />
-          <path d="M8-32h4v4M20-32h4v4" />
+        <g
+          v-else-if="['led', 'diode'].includes(part.type)"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path d="M-30 0h16M-14-13L12 0-14 13ZM12-14v28M12 0h18" />
+          <path v-if="part.type === 'led'" d="M0-20l12-12M12-20l12-12" />
+          <path v-if="part.type === 'led'" d="M8-32h4v4M20-32h4v4" />
         </g>
         <g v-else-if="part.type === 'source'" fill="none" stroke="currentColor" stroke-width="2">
           <circle r="23" />
           <path d="M-10-5v10M-15 0h10M8 0h10M-32 0h9M23 0h9" />
+        </g>
+        <g v-else-if="part.type === 'lamp'" fill="none" stroke="currentColor" stroke-width="2">
+          <circle r="21" />
+          <path d="M-15-15l30 30M-15 15l30-30M-32 0h11M21 0h11" />
         </g>
         <g v-else fill="none" stroke="currentColor" stroke-width="2">
           <path :d="part.closed ? 'M-32 0H32' : 'M-32 0h10l36-18M22 0h10'" />
@@ -101,7 +111,15 @@ function placement(part) {
       <g :transform="'translate(' + placement(part).x + ',' + (placement(part).y - 44) + ')'">
         <text text-anchor="middle" class="schematic-label">
           {{ part.label }} ·
-          {{ part.type === 'switch' ? (part.closed ? 'ON' : 'OFF') : part.value + ' ' + part.unit }}
+          {{
+            part.type === 'switch'
+              ? part.closed
+                ? 'ON'
+                : 'OFF'
+              : (part.type === 'ldr' ? Math.round(resistanceFor(part)) : part.value) +
+                ' ' +
+                part.unit
+          }}
         </text>
         <text y="16" text-anchor="middle" class="schematic-reading">
           {{ formatCurrent(result.parts[part.uid]?.current) }}

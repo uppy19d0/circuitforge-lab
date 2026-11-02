@@ -1,3 +1,19 @@
+export const ledColors = [
+  { id: 'red', name: 'Rojo', color: '#d84439', voltage: 2.0 },
+  { id: 'green', name: 'Verde', color: '#36a873', voltage: 2.2 },
+  { id: 'blue', name: 'Azul', color: '#387ee9', voltage: 3.1 },
+  { id: 'yellow', name: 'Amarillo', color: '#e2b633', voltage: 2.1 },
+  { id: 'orange', name: 'Ámbar', color: '#e68135', voltage: 2.0 },
+  { id: 'white', name: 'Blanco', color: '#e2eaf0', voltage: 3.2 },
+  { id: 'violet', name: 'Violeta', color: '#9560df', voltage: 3.2 },
+];
+export function ledPreset(part) {
+  return (
+    ledColors.find((option) => option.id === part.ledColor) ||
+    ledColors.find((option) => option.color === part.color) ||
+    ledColors[part.id === 'ledGreen' ? 1 : 0]
+  );
+}
 export const componentCatalog = [
   {
     id: 'resistor',
@@ -72,6 +88,147 @@ export const componentCatalog = [
     rating: 1,
   },
 ];
+componentCatalog.push(
+  ...[220, 2200, 10000, 100000].map((value) => ({
+    id: 'resistor' + value,
+    type: 'resistor',
+    name: 'Resistencia de ' + (value >= 1000 ? value / 1000 + ' kΩ' : value + ' Ω'),
+    subtitle: 'Película de carbono · ¼ W',
+    category: 'Pasivos',
+    prefix: 'R',
+    value,
+    unit: 'Ω',
+    color: '#b59b69',
+    rating: 0.25,
+  })),
+  ...ledColors.slice(2).map((option) => ({
+    id: 'led' + option.id[0].toUpperCase() + option.id.slice(1),
+    type: 'led',
+    name: 'LED ' + option.name.toLowerCase() + ' · 5 mm',
+    subtitle: 'Ánodo / cátodo · 20 mA',
+    category: 'Semiconductores',
+    prefix: 'D',
+    value: option.voltage,
+    unit: 'V',
+    color: option.color,
+    ledColor: option.id,
+    rating: 0.02,
+    diameter: 5,
+  })),
+  {
+    id: 'diode',
+    type: 'diode',
+    name: 'Diodo 1N4148',
+    subtitle: 'Señal · ánodo / cátodo',
+    category: 'Semiconductores',
+    prefix: 'D',
+    value: 0.65,
+    unit: 'V',
+    color: '#bc7254',
+    rating: 0.15,
+    span: 3,
+    dynamicResistance: 2,
+  },
+  {
+    id: 'rectifier',
+    type: 'diode',
+    name: 'Diodo 1N4007',
+    subtitle: 'Rectificador · 1 A',
+    category: 'Semiconductores',
+    prefix: 'D',
+    value: 0.7,
+    unit: 'V',
+    color: '#3e4246',
+    rating: 1,
+    span: 4,
+    dynamicResistance: 0.5,
+  },
+  {
+    id: 'ldr',
+    type: 'ldr',
+    name: 'Fotoresistencia LDR',
+    subtitle: 'Resistencia controlada por luz',
+    category: 'Entradas',
+    prefix: 'LDR',
+    value: 10000,
+    unit: 'Ω',
+    color: '#bf8d5f',
+    rating: 0.1,
+    light: 50,
+    span: 2,
+  },
+  {
+    id: 'rheostat',
+    type: 'rheostat',
+    name: 'Reóstato de 10 kΩ',
+    subtitle: 'Resistencia variable · 2 terminales',
+    category: 'Pasivos',
+    prefix: 'RV',
+    value: 5000,
+    unit: 'Ω',
+    color: '#4f8ca8',
+    rating: 0.25,
+    span: 3,
+    maxResistance: 10000,
+  },
+  {
+    id: 'pushbutton',
+    type: 'switch',
+    name: 'Pulsador normalmente abierto',
+    subtitle: 'Mantén pulsado para cerrar',
+    category: 'Entradas',
+    prefix: 'S',
+    value: 0,
+    unit: '',
+    color: '#a56b57',
+    rating: 1,
+    momentary: true,
+    span: 2,
+  },
+  {
+    id: 'lamp',
+    type: 'lamp',
+    name: 'Lámpara de 6 V',
+    subtitle: 'Filamento · carga resistiva de 60 Ω',
+    category: 'Salidas',
+    prefix: 'H',
+    value: 60,
+    unit: 'Ω',
+    color: '#c6a570',
+    rating: 0.6,
+    span: 3,
+  },
+  {
+    id: 'battery9',
+    type: 'source',
+    name: 'Batería de 9 V',
+    subtitle: 'Alcalina · dos cables de conexión',
+    category: 'Alimentación',
+    prefix: 'V',
+    value: 9,
+    unit: 'V',
+    color: '#b59158',
+    rating: 0.25,
+    internalResistance: 2,
+    body: 'battery9',
+    span: 3,
+  },
+  {
+    id: 'batteryAA',
+    type: 'source',
+    name: 'Portapilas 2 × AA',
+    subtitle: '3 V · dos cables de conexión',
+    category: 'Alimentación',
+    prefix: 'V',
+    value: 3,
+    unit: 'V',
+    color: '#777b81',
+    rating: 1,
+    internalResistance: 0.3,
+    body: 'batteryAA',
+    span: 4,
+  },
+);
 export const getDefinition = (id) => componentCatalog.find((component) => component.id === id);
 export function createComponent(id, anchor, uid, rotation = 0) {
   const definition = getDefinition(id);
@@ -83,6 +240,12 @@ export function createComponent(id, anchor, uid, rotation = 0) {
     rotation,
     label: definition.prefix + uid.replace(/\D/g, ''),
     closed: false,
+    ...(definition.type === 'led'
+      ? {
+          ledColor: definition.ledColor || (id === 'ledGreen' ? 'green' : 'red'),
+          diameter: definition.diameter || 5,
+        }
+      : {}),
   };
 }
 

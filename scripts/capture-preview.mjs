@@ -11,6 +11,9 @@ const errors = [];
 page.on('pageerror', (error) => errors.push(error.message));
 await page.goto(baseURL);
 await page.locator('.breadboard-surface').waitFor();
+await page.locator('[data-part="p3"]').focus();
+await page.keyboard.press('Enter');
+await page.getByRole('button', { name: 'Color de LED: Azul', exact: true }).click();
 await page.screenshot({ path: 'artifacts/circuitforge-montage.png' });
 await page.getByRole('button', { name: '3D', exact: true }).click();
 await page.locator('.three-surface canvas').waitFor();
@@ -18,10 +21,18 @@ await page.evaluate(
   () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
 );
 await page.screenshot({
-  path: 'artifacts/circuitforge-workbench-v2.jpg',
+  path: 'artifacts/circuitforge-catalog-v3.jpg',
   type: 'jpeg',
   quality: 90,
 });
+await page.getByRole('combobox', { name: 'Tipo de protoboard' }).selectOption('bb830');
+await page.evaluate(
+  () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+);
+await page.screenshot({ path: 'artifacts/circuitforge-board-830.jpg', type: 'jpeg', quality: 90 });
+await page.getByRole('combobox', { name: 'Tipo de protoboard' }).selectOption('mini170');
+await page.getByRole('button', { name: 'Montaje', exact: true }).click();
+await page.screenshot({ path: 'artifacts/circuitforge-board-170.png' });
 await page.setViewportSize({ width: 390, height: 844 });
 await page.getByRole('button', { name: 'Montaje', exact: true }).click();
 await page.screenshot({ path: 'artifacts/circuitforge-mobile.png' });

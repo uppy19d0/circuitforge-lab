@@ -1,9 +1,9 @@
 <script setup>
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue';
+import { onMounted, onBeforeUnmount, computed, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildBoard, buildPart, buildWire, disposeGroup, position3D } from '../scene/buildScene';
-import { footprint, nearestHole, validatePlacement, holeById } from '../domain/breadboard';
+import { footprint, nearestHole, validatePlacement, projectBoard } from '../domain/breadboard';
 const props = defineProps({
   project: Object,
   result: Object,
@@ -13,6 +13,8 @@ const props = defineProps({
   wireStart: String,
   zoom: Number,
 });
+const board = computed(() => projectBoard(props.project));
+let boardMesh;
 const emit = defineEmits(['select', 'move', 'hole', 'hover', 'notice']);
 const host = ref(null),
   error = ref('');
@@ -40,14 +42,15 @@ function coords(event) {
   );
   const target = new THREE.Vector3();
   if (!raycaster.ray.intersectPlane(plane, target)) return null;
-  return { x: target.x * 100 + 460, y: target.z * 100 + 300 };
+  return { x: target.x * 100 + board.value.width / 2, y: target.z * 100 + board.value.height / 2 };
 }
 function down(event) {
   if (event.button !== 0) return;
+  if (props.tool === 'pan') return;
   const point = coords(event);
   if (!point) return;
   if (props.tool !== 'select') {
-    const hole = nearestHole(point, props.tool === 'place', 35);
+    const hole = nearestHole(point, props.tool === 'place', 35, board.value);
     if (hole) emit('hole', hole.id);
     event.stopImmediatePropagation();
     return;
@@ -62,10 +65,13 @@ function down(event) {
   if (!part) return;
   event.stopImmediatePropagation();
   event.preventDefault();
-  const anchor = footprint(part)[0];
+  // Drag on a plane through the grabbed surface, avoiding parallax on long boards.
+  plane.constant = -hits[0].point.y;
+  const dragPoint = coords(event) || point;
+  const anchor = footprint(part, board.value)[0];
   drag = {
     part,
-    offset: { x: point.x - anchor.x, y: point.y - anchor.y },
+    offset: { x: dragPoint.x - anchor.x, y: dragPoint.y - anchor.y },
     object,
     pointer: event.pointerId,
     original: object.position.clone(),
@@ -80,6 +86,7 @@ function move(event) {
     drag ? { x: point.x - drag.offset.x, y: point.y - drag.offset.y } : point,
     !!drag || props.tool === 'place',
     drag ? 85 : 30,
+    board.value,
   );
   emit('hover', hole?.id || null);
   if (drag) {
@@ -87,10 +94,10 @@ function move(event) {
     pending = hole ? { ...drag.part, anchor: hole.id } : null;
     if (
       pending &&
-      validatePlacement(pending, props.project.components, props.project.wires).valid
+      validatePlacement(pending, props.project.components, props.project.wires, board.value).valid
     ) {
-      const original = position3D(footprint(drag.part)[0]),
-        next = position3D(hole);
+      const original = position3D(footprint(drag.part, board.value)[0], 0.03, board.value),
+        next = position3D(hole, 0.03, board.value);
       drag.object.position.copy(drag.original).add(next.sub(original));
     }
   }
@@ -98,7 +105,12 @@ function move(event) {
 function up(event) {
   if (!drag) return;
   if (pending && pending.anchor !== drag.part.anchor) {
-    const check = validatePlacement(pending, props.project.components, props.project.wires);
+    const check = validatePlacement(
+      pending,
+      props.project.components,
+      props.project.wires,
+      board.value,
+    );
     if (check.valid) emit('move', pending);
     else emit('notice', check.reason);
   }
@@ -108,6 +120,7 @@ function stop() {
   if (drag && canvas.hasPointerCapture(drag.pointer)) canvas.releasePointerCapture(drag.pointer);
   drag = null;
   pending = null;
+  plane.constant = 0;
   if (controls) controls.enabled = true;
   syncParts();
 }
@@ -115,19 +128,43 @@ function syncParts() {
   if (!parts) return;
   disposeGroup(parts);
   parts.clear();
-  props.project.wires.forEach((wire) => parts.add(buildWire(wire)));
+  props.project.wires.forEach((wire) => parts.add(buildWire(wire, board.value)));
   props.project.components.forEach((part) =>
-    parts.add(buildPart(part, props.result.parts[part.uid], part.uid === props.selectedUid)),
+    parts.add(
+      buildPart(part, props.result.parts[part.uid], part.uid === props.selectedUid, board.value),
+    ),
   );
 }
 watch(() => [props.project, props.result, props.selectedUid], syncParts, { deep: true });
+watch(
+  () => props.tool,
+  (tool) => {
+    if (controls)
+      controls.mouseButtons.LEFT = tool === 'pan' ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+  },
+);
 function centerView() {
   if (!camera || !controls) return;
-  camera.position.set(0, 10, 8);
+  camera.position.set(
+    0,
+    10 * Math.max(1, board.value.width / 920),
+    8 * Math.max(1, board.value.width / 920),
+  );
   controls.target.set(0, 0, 0);
   controls.update();
   oldZoom = 1;
 }
+watch(board, () => {
+  if (!scene) return;
+  if (boardMesh) {
+    scene.remove(boardMesh);
+    disposeGroup(boardMesh);
+  }
+  boardMesh = buildBoard(board.value);
+  scene.add(boardMesh);
+  centerView();
+  syncParts();
+});
 defineExpose({ centerView });
 watch(
   () => props.zoom,
@@ -143,7 +180,11 @@ onMounted(() => {
     scene = new THREE.Scene();
     scene.background = new THREE.Color('#202830');
     camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
-    camera.position.set(0, 10, 8);
+    camera.position.set(
+      0,
+      10 * Math.max(1, board.value.width / 920),
+      8 * Math.max(1, board.value.width / 920),
+    );
     camera.lookAt(0, 0, 0);
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
@@ -162,7 +203,7 @@ onMounted(() => {
     controls.enableDamping = true;
     controls.maxPolarAngle = Math.PI * 0.47;
     controls.minDistance = 5;
-    controls.maxDistance = 24;
+    controls.maxDistance = 48;
     scene.add(new THREE.HemisphereLight('#ffffff', '#8493a0', 2.5));
     const light = new THREE.DirectionalLight('#fff8ec', 3);
     light.position.set(-3, 9, 4);
@@ -181,7 +222,8 @@ onMounted(() => {
     table.position.y = -0.23;
     table.receiveShadow = true;
     scene.add(table);
-    scene.add(buildBoard());
+    boardMesh = buildBoard(board.value);
+    scene.add(boardMesh);
     parts = new THREE.Group();
     scene.add(parts);
     syncParts();

@@ -1,6 +1,13 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { createComponent, getDefinition } from '../data/components';
-import { footprint, holeById, shiftAnchor, validatePlacement } from '../domain/breadboard';
+import { createComponent, getDefinition, ledColors } from '../data/components';
+import {
+  footprint,
+  projectBoard,
+  getBoard,
+  boardCatalog,
+  shiftAnchor,
+  validatePlacement,
+} from '../domain/breadboard';
 import { createExample } from '../domain/projects';
 import { simulateCircuit } from '../engine/simulator';
 
@@ -13,16 +20,26 @@ function readSaved() {
       saved.components?.length <= 80 &&
       saved.wires?.length <= 100 &&
       saved.components.every(
-        (c) => getDefinition(c.id) && footprint(c).length === 2 && Number.isFinite(c.value),
+        (c) =>
+          getDefinition(c.id) &&
+          footprint(c, projectBoard(saved)).length === 2 &&
+          Number.isFinite(c.value),
       ) &&
-      saved.wires.every((w) => holeById[w.from] && holeById[w.to])
-    )
+      saved.wires.every(
+        (w) => projectBoard(saved).holeById[w.from] && projectBoard(saved).holeById[w.to],
+      )
+    ) {
+      saved.components.forEach((part) => {
+        if (part.momentary) part.closed = false;
+      });
       return saved;
+    }
   } catch {}
   return createExample();
 }
 export function useWorkbench() {
   const project = ref(readSaved());
+  const board = computed(() => projectBoard(project.value));
   const selectedUid = ref('p2');
   const view = ref('board');
   const tool = ref('select');
@@ -100,7 +117,9 @@ export function useWorkbench() {
   function placeAt(holeId) {
     if (tool.value === 'wire') {
       if (
-        project.value.components.some((c) => footprint(c).some((p) => p.id === holeId)) ||
+        project.value.components.some((c) =>
+          footprint(c, board.value).some((p) => p.id === holeId),
+        ) ||
         project.value.wires.some((w) => [w.from, w.to].includes(holeId))
       ) {
         message('Contacto ocupado: utiliza un agujero libre del mismo grupo.');
@@ -129,7 +148,12 @@ export function useWorkbench() {
     let sequence = 1;
     while (usedLabels.has(part.prefix + sequence)) sequence++;
     part.label = part.prefix + sequence;
-    const check = validatePlacement(part, project.value.components, project.value.wires);
+    const check = validatePlacement(
+      part,
+      project.value.components,
+      project.value.wires,
+      board.value,
+    );
     if (!check.valid) {
       message(check.reason);
       return;
@@ -141,7 +165,12 @@ export function useWorkbench() {
     message(check.reason);
   }
   function movePart(candidate) {
-    const check = validatePlacement(candidate, project.value.components, project.value.wires);
+    const check = validatePlacement(
+      candidate,
+      project.value.components,
+      project.value.wires,
+      board.value,
+    );
     if (!check.valid) {
       message(check.reason);
       return false;
@@ -173,20 +202,64 @@ export function useWorkbench() {
       value !== undefined &&
       (!Number.isFinite(value) ||
         value <= 0 ||
-        value > (selected.value.type === 'source' ? 24 : 10000000))
+        value > (selected.value.type === 'source' ? 24 : selected.value.maxResistance || 10000000))
     ) {
       message('Introduce un valor válido: fuente de 0–24 V o resistencia positiva.');
       return;
     }
     snapshot();
     Object.assign(selected.value, changes);
+    if (selected.value.type === 'led') {
+      if (changes.ledColor) {
+        const option = ledColors.find((c) => c.id === changes.ledColor);
+        if (option) Object.assign(selected.value, { color: option.color, value: option.voltage });
+      }
+      const option = ledColors.find((c) => c.id === selected.value.ledColor);
+      if (option)
+        selected.value.name =
+          'LED ' + option.name.toLowerCase() + ' · ' + (selected.value.diameter || 5) + ' mm';
+    }
   }
   function loadExample(name) {
     snapshot();
-    project.value = createExample(name);
+    project.value = {
+      ...createExample(name),
+      boardId: board.value.id,
+      splitRails: board.value.splitRails,
+    };
     selectedUid.value = project.value.components[1]?.uid || null;
     cancelTool();
     message('Ejemplo cargado. Todos los elementos se pueden editar.');
+  }
+  function changeBoard(id) {
+    if (!boardCatalog.some((b) => b.id === id)) return;
+    const next = getBoard(id);
+    if (
+      project.value.components.some((c) => footprint(c, next).length !== 2) ||
+      project.value.wires.some((w) => !next.holeById[w.from] || !next.holeById[w.to])
+    ) {
+      message(
+        'Hay terminales fuera de esta placa. Reubica las piezas o cables antes de reducir su tamaño.',
+      );
+      return;
+    }
+    snapshot();
+    project.value.boardId = id;
+    project.value.splitRails = next.splitRails;
+    zoom.value = 1;
+    hoveredHole.value = null;
+    cancelTool();
+    message(next.shortName + ' · ' + next.contacts + ' contactos · ' + next.dimensions);
+  }
+  function toggleRails() {
+    if (!board.value.rails) return;
+    snapshot();
+    project.value.splitRails = !board.value.splitRails;
+    message(
+      project.value.splitRails
+        ? 'Rieles divididos al centro: utiliza un puente para unirlos.'
+        : 'Rieles continuos en toda la placa.',
+    );
   }
   function keyboard(event) {
     if (event.target.closest('input, textarea, select, [contenteditable], dialog[open]')) return;
@@ -199,6 +272,7 @@ export function useWorkbench() {
     if (event.key.toLowerCase() === 'r') rotate();
     if (event.key.toLowerCase() === 'w') selectTool('wire');
     if (event.key.toLowerCase() === 'v') selectTool('select');
+    if (event.key.toLowerCase() === 'h') selectTool('pan');
     if (['Delete', 'Backspace'].includes(event.key)) {
       event.preventDefault();
       removeSelected();
@@ -208,7 +282,7 @@ export function useWorkbench() {
     ];
     if (delta && selected.value?.type) {
       event.preventDefault();
-      const anchor = shiftAnchor(selected.value, ...delta);
+      const anchor = shiftAnchor(selected.value, ...delta, board.value);
       if (anchor) movePart({ ...selected.value, anchor });
     }
   }
@@ -234,6 +308,9 @@ export function useWorkbench() {
   });
   return {
     project,
+    board,
+    changeBoard,
+    toggleRails,
     selected,
     selectedUid,
     view,

@@ -7,11 +7,14 @@ import InteractiveBreadboard from './components/InteractiveBreadboard.vue';
 import ComponentInspector from './components/ComponentInspector.vue';
 import SchematicView from './components/SchematicView.vue';
 import AnalysisPanel from './components/AnalysisPanel.vue';
-import { holes, holeById } from './domain/breadboard';
+
 import { lessons } from './data/lessons';
 const CircuitScene = defineAsyncComponent(() => import('./components/CircuitScene.vue'));
 const {
   project,
+  board,
+  changeBoard,
+  toggleRails,
   selected,
   selectedUid,
   view,
@@ -44,11 +47,11 @@ const showLibrary = ref(false),
   viewport = ref(null),
   guide = ref(null),
   lesson = ref('ohm');
-const hovered = computed(() => holeById[hoveredHole.value]);
+const hovered = computed(() => board.value.holeById[hoveredHole.value]);
 const viewComponent = computed(() => (view.value === '3d' ? CircuitScene : InteractiveBreadboard));
 const activePins = computed(() =>
   hovered.value
-    ? holes
+    ? board.value.holes
         .filter((h) => h.net === hovered.value.net)
         .map((h) => h.id.toUpperCase())
         .join(' · ')
@@ -112,12 +115,24 @@ function centerView() {
       </div>
     </header>
     <div class="workspace-layout">
-      <ComponentLibrary :placing="placing" @add="choose" @example="loadExample" />
+      <ComponentLibrary
+        :placing="placing"
+        :board-id="board.id"
+        @add="choose"
+        @example="loadExample"
+        @board="changeBoard"
+      />
       <main class="main-workspace">
         <div class="document-bar">
           <div class="document-tab">
             <AppIcon name="layers" :size="15" /><span>{{ project.name }}</span
             ><i></i>
+          </div>
+          <div class="board-config">
+            <span>{{ board.dimensions }}</span
+            ><button v-if="board.rails" :aria-pressed="board.splitRails" @click="toggleRails">
+              {{ board.splitRails ? 'Rieles: divididos' : 'Rieles: continuos' }}
+            </button>
           </div>
           <div class="save-status">
             <AppIcon name="check" :size="13" />{{
@@ -127,6 +142,16 @@ function centerView() {
         </div>
         <div class="workspace-toolbar">
           <div class="toolbar-group">
+            <button
+              class="icon-button"
+              :class="{ active: tool === 'pan' }"
+              aria-label="Desplazar vista (H)"
+              title="Desplazar vista (H). También Shift + arrastrar."
+              :disabled="view === 'schematic'"
+              @click="selectTool('pan')"
+            >
+              <AppIcon name="pan" />
+            </button>
             <button
               class="mobile-library-toggle icon-button"
               aria-label="Abrir biblioteca"
@@ -216,7 +241,8 @@ function centerView() {
         <section id="workbench-canvas" class="canvas-workspace" tabindex="-1">
           <div class="canvas-context">
             <span class="board-chip"
-              ><span class="small-board-icon"></span>Protoboard · 400 contactos</span
+              ><span class="small-board-icon"></span>{{ board.shortName }} ·
+              {{ board.contacts }} contactos</span
             ><span class="canvas-status" :class="'tone-' + result.state"
               ><i></i>{{ result.label }}</span
             >
@@ -245,7 +271,7 @@ function centerView() {
             @hover="hoveredHole = $event"
             @notice="message"
           />
-          <div v-if="tool !== 'select'" class="placement-prompt">
+          <div v-if="tool === 'place' || tool === 'wire'" class="placement-prompt">
             <AppIcon :name="tool === 'wire' ? 'wire' : 'plus'" :size="16" /><span>{{
               tool === 'wire'
                 ? wireStart
@@ -268,11 +294,18 @@ function centerView() {
             </button>
           </div>
           <div class="board-caption">
-            <strong>{{ hovered ? hovered.id.toUpperCase() : 'BB-400' }}</strong
+            <strong>{{ hovered ? hovered.id.toUpperCase() : board.shortName }}</strong
             ><span>{{
               hovered
                 ? 'Contactos comunes: ' + activePins
-                : 'Contactos de 2,54 mm · dos bancos aislados · rieles continuos'
+                : 'Paso 2,54 mm · ' +
+                  board.dimensions +
+                  ' · ' +
+                  (!board.rails
+                    ? 'sin rieles'
+                    : board.splitRails
+                      ? 'rieles seccionados'
+                      : 'rieles continuos')
             }}</span>
           </div>
         </section>
@@ -287,6 +320,7 @@ function centerView() {
           <AppIcon name="close" /></button
         ><ComponentInspector
           :selected="selected"
+          :board="board"
           :result="result"
           @update="updatePart"
           @remove="removeSelected"

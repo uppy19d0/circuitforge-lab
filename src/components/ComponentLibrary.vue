@@ -1,13 +1,20 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, nextTick } from 'vue';
 import AppIcon from './AppIcon.vue';
 import PartGraphic from './PartGraphic.vue';
+import { boardCatalog } from '../domain/breadboard';
 import { componentCatalog } from '../data/components';
-defineProps({ placing: String });
-defineEmits(['add', 'example']);
+const props = defineProps({ placing: String, boardId: String });
+const emit = defineEmits(['add', 'example', 'board']);
+function selectBoard(event) {
+  emit('board', event.target.value);
+  nextTick(() => {
+    event.target.value = props.boardId || 'bb400';
+  });
+}
 const search = ref('');
 const category = ref('Todos');
-const categories = ['Todos', 'Pasivos', 'Semiconductores', 'Alimentación', 'Entradas'];
+const categories = ['Todos', 'Pasivos', 'Semiconductores', 'Alimentación', 'Entradas', 'Salidas'];
 const filtered = computed(() =>
   componentCatalog.filter(
     (part) =>
@@ -40,6 +47,23 @@ const filtered = computed(() =>
       >
         {{ item }}
       </button>
+    </div>
+    <div class="board-chooser">
+      <label for="board-format">PROTOBOARD</label>
+      <select
+        id="board-format"
+        aria-label="Tipo de protoboard"
+        :value="boardId || 'bb400'"
+        @change="selectBoard"
+      >
+        <option v-for="board in boardCatalog" :key="board.id" :value="board.id">
+          {{ board.name }}
+        </option>
+      </select>
+      <span
+        >{{ boardCatalog.find((b) => b.id === boardId)?.dimensions || '83 × 55 mm' }} · paso de 2,54
+        mm</span
+      >
     </div>
     <div class="library-section-label">COMPONENTES DEL LABORATORIO</div>
     <div class="parts-list">
