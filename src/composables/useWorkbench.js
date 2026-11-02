@@ -189,7 +189,7 @@ export function useWorkbench() {
     message('Ejemplo cargado. Todos los elementos se pueden editar.');
   }
   function keyboard(event) {
-    if (event.target.closest('input, textarea, select, [contenteditable]')) return;
+    if (event.target.closest('input, textarea, select, [contenteditable], dialog[open]')) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
       event.preventDefault();
       event.shiftKey ? redo() : undo();

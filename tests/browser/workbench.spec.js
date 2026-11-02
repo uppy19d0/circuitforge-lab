@@ -59,6 +59,27 @@ test('add, keyboard-move, rotate, remove and restore a component', async ({ page
   await page.reload();
   await expect(page.locator('[data-part]')).toHaveCount(4);
 });
+test('invalid edge drops and interrupted drags preserve the original placement', async ({
+  page,
+}) => {
+  await page.goto('./');
+  const start = await screenPoint(page, 262, 210);
+  const outside = await screenPoint(page, 858, 210);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(outside.x, outside.y, { steps: 12 });
+  await page.mouse.up();
+  await expect(page.locator('.terminal-list')).toContainText('C6');
+  await expect(page.locator('.analysis-metrics .accent')).toHaveText('14.56 mA');
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  const next = await screenPoint(page, 574, 210);
+  await page.mouse.move(next.x, next.y, { steps: 8 });
+  await page.locator('.breadboard-surface').dispatchEvent('pointercancel', { pointerId: 1 });
+  await page.mouse.up();
+  await expect(page.locator('.terminal-list')).toContainText('C6');
+  await expect(page.locator('.analysis-metrics .accent')).toHaveText('14.56 mA');
+});
 test('wiring actual supply nets detects a finite short; deleting the wire restores the circuit', async ({
   page,
 }) => {
@@ -118,6 +139,10 @@ test('3D renders the same circuit and raycast dragging moves its physical compon
   await page.mouse.move(b.x, b.y, { steps: 18 });
   await page.mouse.up();
   await expect(page.locator('.canvas-status')).toHaveText('Circuito abierto');
+  await page.getByRole('button', { name: 'Acercar', exact: true }).click();
+  await expect(page.locator('.viewport-controls > span')).toHaveText('115%');
+  await page.getByRole('button', { name: 'Centrar vista', exact: true }).click();
+  await expect(page.locator('.viewport-controls > span')).toHaveText('100%');
   await page.getByRole('button', { name: 'Montaje', exact: true }).click();
   await expect(page.locator('.terminal-list')).toContainText('C18');
   expect(errors).toEqual([]);

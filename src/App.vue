@@ -41,6 +41,7 @@ const {
 } = useWorkbench();
 const showLibrary = ref(false),
   showInspector = ref(false),
+  viewport = ref(null),
   guide = ref(null),
   lesson = ref('ohm');
 const hovered = computed(() => holeById[hoveredHole.value]);
@@ -61,6 +62,7 @@ function choose(id) {
   showLibrary.value = false;
 }
 function changeView(next) {
+  zoom.value = 1;
   view.value = next;
   cancelTool();
 }
@@ -69,6 +71,10 @@ function zoomBy(delta) {
 }
 function select(uid) {
   selectedUid.value = uid;
+}
+function centerView() {
+  zoom.value = 1;
+  viewport.value?.centerView?.();
 }
 </script>
 <template>
@@ -224,6 +230,7 @@ function select(uid) {
           />
           <component
             :is="viewComponent"
+            ref="viewport"
             v-else
             :project="project"
             :result="result"
@@ -256,7 +263,7 @@ function select(uid) {
             ><span>{{ Math.round(zoom * 100) }}%</span
             ><button aria-label="Acercar" @click="zoomBy(0.15)">
               <AppIcon name="plus" :size="15" /></button
-            ><button aria-label="Centrar vista" @click="zoom = 1">
+            ><button aria-label="Centrar vista" @click="centerView">
               <AppIcon name="fit" :size="15" />
             </button>
           </div>

@@ -121,6 +121,14 @@ function syncParts() {
   );
 }
 watch(() => [props.project, props.result, props.selectedUid], syncParts, { deep: true });
+function centerView() {
+  if (!camera || !controls) return;
+  camera.position.set(0, 10, 8);
+  controls.target.set(0, 0, 0);
+  controls.update();
+  oldZoom = 1;
+}
+defineExpose({ centerView });
 watch(
   () => props.zoom,
   (value) => {
