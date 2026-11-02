@@ -51,7 +51,7 @@ export function useWorkbench() {
   const notice = ref('Arrastra un componente por su cuerpo o elige una pieza en la biblioteca.');
   const history = ref([]);
   const future = ref([]);
-  const saving = ref(true);
+  const saveState = ref('saved');
   const selected = computed(
     () =>
       project.value.components.find((c) => c.uid === selectedUid.value) ||
@@ -72,6 +72,21 @@ export function useWorkbench() {
         },
   );
   let timer;
+  function persistProject() {
+    clearTimeout(timer);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(project.value));
+      saveState.value = 'saved';
+    } catch {
+      saveState.value = 'error';
+    }
+  }
+  function flushPendingSave() {
+    if (saveState.value === 'pending') persistProject();
+  }
+  function onVisibilityChange() {
+    if (document.visibilityState === 'hidden') flushPendingSave();
+  }
   function message(text) {
     notice.value = text;
   }
@@ -287,23 +302,22 @@ export function useWorkbench() {
     }
   }
   window.addEventListener('keydown', keyboard);
+  window.addEventListener('pagehide', flushPendingSave);
+  document.addEventListener('visibilitychange', onVisibilityChange);
   watch(
     project,
     () => {
       clearTimeout(timer);
-      timer = setTimeout(() => {
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(project.value));
-          saving.value = true;
-        } catch {
-          saving.value = false;
-        }
-      }, 200);
+      saveState.value = 'pending';
+      timer = setTimeout(persistProject, 200);
     },
     { deep: true },
   );
   onBeforeUnmount(() => {
+    flushPendingSave();
     window.removeEventListener('keydown', keyboard);
+    window.removeEventListener('pagehide', flushPendingSave);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
     clearTimeout(timer);
   });
   return {
@@ -324,7 +338,7 @@ export function useWorkbench() {
     result,
     history,
     future,
-    saving,
+    saveState,
     message,
     undo,
     redo,

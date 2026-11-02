@@ -28,7 +28,7 @@ const {
   result,
   history,
   future,
-  saving,
+  saveState,
   message,
   undo,
   redo,
@@ -136,7 +136,11 @@ function centerView() {
           </div>
           <div class="save-status">
             <AppIcon name="check" :size="13" />{{
-              saving ? 'Guardado en este navegador' : 'Guardado no disponible'
+              saveState === 'pending'
+                ? 'Guardando…'
+                : saveState === 'saved'
+                  ? 'Guardado en este navegador'
+                  : 'Guardado no disponible'
             }}
           </div>
         </div>

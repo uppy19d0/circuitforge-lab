@@ -32,6 +32,26 @@ test('LED color and package diameter update the actual component, current and sa
   ).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByLabel('Diámetro del LED', { exact: true })).toHaveValue('10');
 });
+test('immediate reload flushes pending board and LED edits before leaving the page', async ({
+  page,
+}) => {
+  await page.goto('./');
+  const selector = page.getByRole('combobox', { name: 'Tipo de protoboard' });
+  await selector.selectOption('bb830');
+  await page.locator('[data-part="p3"]').focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Color de LED: Azul', exact: true }).click();
+  await page.getByLabel('Diámetro del LED', { exact: true }).selectOption('10');
+  await page.reload();
+  await expect(selector).toHaveValue('bb830');
+  await page.locator('[data-part="p3"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Diámetro del LED', { exact: true })).toHaveValue('10');
+  await expect(
+    page.getByRole('button', { name: 'Color de LED: Azul', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.analysis-metrics .accent')).toHaveText('12.27 mA');
+});
 test('switch board formats, preserve circuit and reject a shrink that would lose parts', async ({
   page,
 }) => {
