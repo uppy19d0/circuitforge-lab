@@ -1,25 +1,211 @@
 <script setup>
-import { onMounted, onBeforeUnmount, ref } from 'vue';
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-const host = ref(null); let renderer; let frame; let observer; let scene; let camera; let controls; let bench;
-const material = color => new THREE.MeshStandardMaterial({ color, roughness: .32 });
-const box = (size, position, color) => { const m = new THREE.Mesh(new THREE.BoxGeometry(...size), material(color)); m.position.set(...position); bench.add(m); };
-const cylinder = (radius, height, position, color) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 24), material(color)); m.position.set(...position); bench.add(m); };
-function buildBench() { 
-  // Standard solderless breadboard: two five-hole terminal strips, center trench and power buses.
-  box([6.5, .24, 3.25], [0, -.25, 0], 0xe7edf0);
-  box([6.25, .025, .05], [0, -.1, -.98], 0xd9414e); box([6.25, .025, .05], [0, -.1, -1.13], 0x3772b8);
-  box([6.25, .025, .05], [0, -.1, .98], 0xd9414e); box([6.25, .025, .05], [0, -.1, 1.13], 0x3772b8);
-  box([6.15, .08, .2], [0, -.03, 0], 0xcbd4d9);
-  for (let column = 0; column < 30; column += 1) { const x = -2.9 + column * .2; for (const z of [-.68, -.51, -.34, .34, .51, .68]) cylinder(.035, .045, [x, -.08, z], 0x536877); }
-  for (let column = 0; column < 30; column += 1) { const x = -2.9 + column * .2; for (const z of [-1.02, 1.02]) { cylinder(.035, .045, [x, -.08, z], 0x536877); cylinder(.035, .045, [x, -.08, z + (z < 0 ? -.12 : .12)], z < 0 ? 0xd9414e : 0x3772b8); } }
-  box([1.7, .18, .08], [-1.2, .12, -.51], 0xdca56b); for (let x = -1.7; x < -.5; x += .24) box([.035, .22, .04], [x, .23, -.51], 0x963d39);
-  cylinder(.22, .25, [.5, .12, .34], 0xe84f62); cylinder(.08, .12, [.5, .31, .34], 0xffb3a7);
-  box([.65, .55, .75], [1.8, .12, .34], 0x263f58); box([.08, .7, .9], [1.65, .12, .34], 0xb9d9e0); box([.08, .85, .9], [1.95, .12, .34], 0xd74e4e);
+import { buildBoard, buildPart, buildWire, disposeGroup, position3D } from '../scene/buildScene';
+import { footprint, nearestHole, validatePlacement, holeById } from '../domain/breadboard';
+const props = defineProps({
+  project: Object,
+  result: Object,
+  selectedUid: String,
+  tool: String,
+  placing: String,
+  wireStart: String,
+  zoom: Number,
+});
+const emit = defineEmits(['select', 'move', 'hole', 'hover', 'notice']);
+const host = ref(null),
+  error = ref('');
+let renderer,
+  scene,
+  camera,
+  controls,
+  resizeObserver,
+  frame,
+  parts,
+  drag,
+  pending,
+  canvas,
+  oldZoom = 1;
+const raycaster = new THREE.Raycaster();
+const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+function coords(event) {
+  const box = canvas.getBoundingClientRect();
+  raycaster.setFromCamera(
+    new THREE.Vector2(
+      ((event.clientX - box.left) / box.width) * 2 - 1,
+      (-(event.clientY - box.top) / box.height) * 2 + 1,
+    ),
+    camera,
+  );
+  const target = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(plane, target)) return null;
+  return { x: target.x * 100 + 460, y: target.z * 100 + 300 };
 }
-function resize() { const rect = host.value.getBoundingClientRect(); renderer.setSize(rect.width, rect.height, false); camera.aspect = rect.width / rect.height; camera.updateProjectionMatrix(); }
-onMounted(() => { scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a1728); camera = new THREE.PerspectiveCamera(42, 1, .1, 100); camera.position.set(5, 4, 6); renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); host.value.appendChild(renderer.domElement); controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; scene.add(new THREE.HemisphereLight(0xaad8ff, 0x162235, 2)); const light = new THREE.DirectionalLight(0xffffff, 3); light.position.set(4, 7, 3); scene.add(light); bench = new THREE.Group(); scene.add(bench); buildBench(); observer = new ResizeObserver(resize); observer.observe(host.value); const tick = () => { frame = requestAnimationFrame(tick); bench.rotation.y += .001; controls.update(); renderer.render(scene, camera); }; tick(); });
-onBeforeUnmount(() => { cancelAnimationFrame(frame); observer?.disconnect(); controls?.dispose(); renderer?.dispose(); });
+function down(event) {
+  if (event.button !== 0) return;
+  const point = coords(event);
+  if (!point) return;
+  if (props.tool !== 'select') {
+    const hole = nearestHole(point, props.tool === 'place', 35);
+    if (hole) emit('hole', hole.id);
+    event.stopImmediatePropagation();
+    return;
+  }
+  const hits = raycaster.intersectObjects(parts.children, true);
+  if (!hits.length) return;
+  let object = hits[0].object;
+  while (object && !object.userData.uid) object = object.parent;
+  const part = props.project.components.find((p) => p.uid === object?.userData.uid);
+  if (!object) return;
+  emit('select', object.userData.uid);
+  if (!part) return;
+  event.stopImmediatePropagation();
+  event.preventDefault();
+  const anchor = footprint(part)[0];
+  drag = {
+    part,
+    offset: { x: point.x - anchor.x, y: point.y - anchor.y },
+    object,
+    pointer: event.pointerId,
+    original: object.position.clone(),
+  };
+  controls.enabled = false;
+  canvas.setPointerCapture(event.pointerId);
+}
+function move(event) {
+  const point = coords(event);
+  if (!point) return;
+  const hole = nearestHole(
+    drag ? { x: point.x - drag.offset.x, y: point.y - drag.offset.y } : point,
+    !!drag || props.tool === 'place',
+    drag ? 85 : 30,
+  );
+  emit('hover', hole?.id || null);
+  if (drag) {
+    event.stopImmediatePropagation();
+    pending = hole ? { ...drag.part, anchor: hole.id } : null;
+    if (
+      pending &&
+      validatePlacement(pending, props.project.components, props.project.wires).valid
+    ) {
+      const original = position3D(footprint(drag.part)[0]),
+        next = position3D(hole);
+      drag.object.position.copy(drag.original).add(next.sub(original));
+    }
+  }
+}
+function up(event) {
+  if (!drag) return;
+  if (pending && pending.anchor !== drag.part.anchor) {
+    const check = validatePlacement(pending, props.project.components, props.project.wires);
+    if (check.valid) emit('move', pending);
+    else emit('notice', check.reason);
+  }
+  stop(event);
+}
+function stop() {
+  if (drag && canvas.hasPointerCapture(drag.pointer)) canvas.releasePointerCapture(drag.pointer);
+  drag = null;
+  pending = null;
+  if (controls) controls.enabled = true;
+  syncParts();
+}
+function syncParts() {
+  if (!parts) return;
+  disposeGroup(parts);
+  parts.clear();
+  props.project.wires.forEach((wire) => parts.add(buildWire(wire)));
+  props.project.components.forEach((part) =>
+    parts.add(buildPart(part, props.result.parts[part.uid], part.uid === props.selectedUid)),
+  );
+}
+watch(() => [props.project, props.result, props.selectedUid], syncParts, { deep: true });
+watch(
+  () => props.zoom,
+  (value) => {
+    if (camera) {
+      camera.position.multiplyScalar(oldZoom / value);
+      oldZoom = value;
+    }
+  },
+);
+onMounted(() => {
+  try {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color('#202830');
+    camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+    camera.position.set(0, 10, 8);
+    camera.lookAt(0, 0, 0);
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.95;
+    canvas = renderer.domElement;
+    canvas.setAttribute('aria-label', 'Protoboard 3D interactivo');
+    host.value.appendChild(canvas);
+    canvas.addEventListener('pointerdown', down, true);
+    canvas.addEventListener('pointermove', move, true);
+    canvas.addEventListener('pointerup', up, true);
+    canvas.addEventListener('pointercancel', stop);
+    controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.maxPolarAngle = Math.PI * 0.47;
+    controls.minDistance = 5;
+    controls.maxDistance = 24;
+    scene.add(new THREE.HemisphereLight('#ffffff', '#8493a0', 2.5));
+    const light = new THREE.DirectionalLight('#fff8ec', 3);
+    light.position.set(-3, 9, 4);
+    light.castShadow = true;
+    light.shadow.mapSize.set(1024, 1024);
+    light.shadow.camera.left = -7;
+    light.shadow.camera.right = 7;
+    light.shadow.camera.top = 7;
+    light.shadow.camera.bottom = -7;
+    scene.add(light);
+    const table = new THREE.Mesh(
+      new THREE.PlaneGeometry(200, 200),
+      new THREE.MeshStandardMaterial({ color: '#29333b', roughness: 1 }),
+    );
+    table.rotation.x = -Math.PI / 2;
+    table.position.y = -0.23;
+    table.receiveShadow = true;
+    scene.add(table);
+    scene.add(buildBoard());
+    parts = new THREE.Group();
+    scene.add(parts);
+    syncParts();
+    resizeObserver = new ResizeObserver(() => {
+      const rect = host.value.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      renderer.setSize(rect.width, rect.height, false);
+      camera.aspect = rect.width / rect.height;
+      camera.updateProjectionMatrix();
+    });
+    resizeObserver.observe(host.value);
+    function animate() {
+      frame = requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  } catch {
+    error.value = 'No se pudo iniciar WebGL. Puedes continuar en la vista Montaje.';
+  }
+});
+onBeforeUnmount(() => {
+  cancelAnimationFrame(frame);
+  resizeObserver?.disconnect();
+  controls?.dispose();
+  if (scene) disposeGroup(scene);
+  renderer?.dispose();
+});
 </script>
-<template><div ref="host" class="scene-canvas"><span class="scene-label">Mesa 3D · arrastra para rotar</span><span class="scene-help">rueda: zoom</span></div></template>
+<template>
+  <div ref="host" class="three-surface">
+    <div v-if="error" class="webgl-error">{{ error }}</div>
+    <span class="three-help">Arrastra una pieza para moverla · arrastra el fondo para orbitar</span>
+  </div>
+</template>

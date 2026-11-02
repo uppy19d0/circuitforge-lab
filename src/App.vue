@@ -1,5 +1,331 @@
 <script setup>
-import { computed, ref } from 'vue'; import ComponentLibrary from './components/ComponentLibrary.vue'; import InteractiveBreadboard from './components/InteractiveBreadboard.vue'; import SchematicView from './components/SchematicView.vue'; import { componentCatalog } from './data/components'; import { formatCurrent, simulateCircuit } from './engine/simulator';
-const view=ref('3d'),exercise=ref('led'),selected=ref(null),uid=ref(4); const seed=(id,x,y)=>({...componentCatalog.find(c=>c.id===id),uid:uid.value++,x,y}); const items=ref([seed('battery',650,250),seed('resistor',360,220),seed('led',540,320)]); const result=computed(()=>simulateCircuit(exercise.value)),status=computed(()=>({...result.value,currentLabel:formatCurrent(result.value.current)})); function add(c){items.value.push({...c,uid:uid.value++,x:260+(items.value.length%4)*100,y:160+(items.value.length%3)*80});selected.value=c} function move(p){const item=items.value.find(x=>x.uid===p.uid);if(item){item.x=p.x;item.y=p.y}} function remove(id){items.value=items.value.filter(x=>x.uid!==id);if(selected.value?.uid===id)selected.value=null}
+import { computed, defineAsyncComponent, ref, watch } from 'vue';
+import { useWorkbench } from './composables/useWorkbench';
+import AppIcon from './components/AppIcon.vue';
+import ComponentLibrary from './components/ComponentLibrary.vue';
+import InteractiveBreadboard from './components/InteractiveBreadboard.vue';
+import ComponentInspector from './components/ComponentInspector.vue';
+import SchematicView from './components/SchematicView.vue';
+import AnalysisPanel from './components/AnalysisPanel.vue';
+import { holes, holeById } from './domain/breadboard';
+import { lessons } from './data/lessons';
+const CircuitScene = defineAsyncComponent(() => import('./components/CircuitScene.vue'));
+const {
+  project,
+  selected,
+  selectedUid,
+  view,
+  tool,
+  placing,
+  wireStart,
+  hoveredHole,
+  zoom,
+  running,
+  notice,
+  result,
+  history,
+  future,
+  saving,
+  message,
+  undo,
+  redo,
+  cancelTool,
+  selectTool,
+  choosePart,
+  placeAt,
+  movePart,
+  removeSelected,
+  rotate,
+  updatePart,
+  loadExample,
+} = useWorkbench();
+const showLibrary = ref(false),
+  showInspector = ref(false),
+  guide = ref(null),
+  lesson = ref('ohm');
+const hovered = computed(() => holeById[hoveredHole.value]);
+const viewComponent = computed(() => (view.value === '3d' ? CircuitScene : InteractiveBreadboard));
+const activePins = computed(() =>
+  hovered.value
+    ? holes
+        .filter((h) => h.net === hovered.value.net)
+        .map((h) => h.id.toUpperCase())
+        .join(' · ')
+    : '',
+);
+watch(selectedUid, () => {
+  if (selectedUid.value && window.innerWidth < 1100) showInspector.value = true;
+});
+function choose(id) {
+  choosePart(id);
+  showLibrary.value = false;
+}
+function changeView(next) {
+  view.value = next;
+  cancelTool();
+}
+function zoomBy(delta) {
+  zoom.value = Math.min(1.8, Math.max(0.65, zoom.value + delta));
+}
+function select(uid) {
+  selectedUid.value = uid;
+}
 </script>
-<template><div class="lab-shell"><header class="lab-topbar"><div class="lab-logo"><span>⌁</span></div><nav><button>Archivo⌄</button><button>Editar⌄</button><button>Vista⌄</button></nav><div class="document-title"><i></i><strong>Mi primer circuito</strong><small>LOCAL</small></div><div class="top-status"><span class="healthy" :class="status.status">⌁ {{status.label}}</span><button class="top-control" :class="{active:view==='3d'}" @click="view='3d'">3D</button><button class="top-control" :class="{active:view==='diagram'}" @click="view='diagram'">Esquema</button><button class="run-control" @click="exercise=exercise==='led'?'overload':'led'">{{exercise==='led'?'Ⅱ Pausar':'▶ Ejecutar'}}</button><button class="top-control" @click="exercise='led'">Reset</button></div></header><div class="lab-body"><ComponentLibrary :selected-id="selected?.id" @select="selected=$event" @add="add"/><main class="lab-center"><section class="lab-canvas" :class="`state-${status.status}`"><InteractiveBreadboard v-if="view==='3d'" :items="items" @move="move" @remove="remove" @select="selected=$event"/><SchematicView v-else/><div class="canvas-badge"><b>{{status.label}}</b><span>{{status.currentLabel}} · {{status.voltage.toFixed(1)}} V</span></div><div class="canvas-tools"><button>＋</button><button>−</button><button>⌖</button></div></section><section class="analysis-panel"><header><div><strong>⌁ Análisis</strong><span>{{status.detail}}</span></div><div class="analysis-actions"><button @click="exercise='divider'">Divisor</button><button @click="exercise='inverter'">Inversor</button><button @click="exercise='short'">Corto</button></div></header><div class="analysis-content"><aside><span>COMPONENTES</span><strong>{{items.length}}</strong><p>Añade desde la biblioteca, arrastra sobre la placa y usa doble clic para eliminar.</p></aside><div class="scope"><svg viewBox="0 0 700 180"><path d="M0 105 C35 105 35 45 70 45 S105 140 140 140 175 50 210 50 245 130 280 130 315 45 350 45 385 135 420 135 455 55 490 55 525 125 560 125 595 45 630 45 665 105 700 105"/></svg><span>{{status.status==='ok'?'SEÑAL ESTABLE':status.status==='warn'?'LÍMITE SUPERADO':'FALLO DETECTADO'}}</span></div></div></section></main><aside class="properties-panel"><div class="property-tabs"><button class="active">Inspector</button><button>Diagnóstico</button></div><div class="property-body"><span class="eyebrow">Propiedades</span><h2>{{selected?.name||'Sin selección'}}</h2><code>{{selected?.id||'selecciona-un-componente'}}</code><label>Nombre<input :value="selected?.name||''" readonly></label><dl><div><dt>Valor</dt><dd>{{selected?.value||'—'}}</dd></div><div><dt>Pines</dt><dd>{{selected?.pins?.join(' · ')||'—'}}</dd></div><div><dt>Voltaje</dt><dd>{{status.voltage.toFixed(2)}} V</dd></div><div><dt>Corriente</dt><dd>{{status.currentLabel}}</dd></div></dl><button v-if="selected?.uid" class="remove-button" @click="remove(selected.uid)">Eliminar componente</button><div class="diagnostic" :class="status.status"><b>{{status.label}}</b><p>{{status.detail}}</p></div></div></aside></div></div></template>
+<template>
+  <div
+    class="workbench"
+    :class="{ 'library-open': showLibrary, 'inspector-open': showInspector }"
+    :data-view="view"
+  >
+    <a class="skip-link" href="#workbench-canvas">Ir al área de montaje</a>
+    <header class="app-header">
+      <a class="app-brand" href="/" aria-label="Volver al portfolio"
+        ><span class="brand-logo"><AppIcon name="circuit" :size="25" /></span
+        ><span>CircuitForge <b>Lab</b><small>LABORATORIO DE ELECTRÓNICA</small></span></a
+      >
+      <div class="header-project">
+        <span class="save-dot"></span>{{ project.name }}<span class="local-label">LOCAL</span>
+      </div>
+      <div class="header-actions">
+        <button class="quiet-button guide-button" @click="guide.showModal()">
+          <AppIcon name="book" :size="16" /> Guía</button
+        ><button
+          class="quiet-button reset-button"
+          aria-label="Reiniciar circuito"
+          @click="
+            loadExample('led');
+            running = true;
+          "
+        >
+          <AppIcon name="reset" :size="16" /> Reiniciar</button
+        ><button class="run-button" :class="{ running }" @click="running = !running">
+          <AppIcon :name="running ? 'pause' : 'play'" :size="15" />{{
+            running ? 'Pausar' : 'Simular'
+          }}
+        </button>
+      </div>
+    </header>
+    <div class="workspace-layout">
+      <ComponentLibrary :placing="placing" @add="choose" @example="loadExample" />
+      <main class="main-workspace">
+        <div class="document-bar">
+          <div class="document-tab">
+            <AppIcon name="layers" :size="15" /><span>{{ project.name }}</span
+            ><i></i>
+          </div>
+          <div class="save-status">
+            <AppIcon name="check" :size="13" />{{
+              saving ? 'Guardado en este navegador' : 'Guardado no disponible'
+            }}
+          </div>
+        </div>
+        <div class="workspace-toolbar">
+          <div class="toolbar-group">
+            <button
+              class="mobile-library-toggle icon-button"
+              aria-label="Abrir biblioteca"
+              @click="showLibrary = !showLibrary"
+            >
+              <AppIcon name="grid" /></button
+            ><button
+              class="icon-button"
+              :class="{ active: tool === 'select' }"
+              aria-label="Seleccionar y mover (V)"
+              title="Seleccionar y mover (V)"
+              @click="selectTool('select')"
+            >
+              <AppIcon name="cursor" /></button
+            ><button
+              class="icon-button"
+              :class="{ active: tool === 'wire' }"
+              :disabled="view === 'schematic'"
+              aria-label="Conectar cable (W)"
+              title="Conectar cable (W)"
+              @click="selectTool('wire')"
+            >
+              <AppIcon name="wire" /></button
+            ><span class="toolbar-divider"></span
+            ><button
+              class="icon-button"
+              :disabled="!selected?.type"
+              aria-label="Rotar componente (R)"
+              title="Rotar (R)"
+              @click="rotate"
+            >
+              <AppIcon name="rotate" /></button
+            ><button
+              class="icon-button"
+              :disabled="!selected"
+              aria-label="Eliminar selección"
+              title="Eliminar selección"
+              @click="removeSelected"
+            >
+              <AppIcon name="trash" /></button
+            ><span class="toolbar-divider"></span
+            ><button
+              class="icon-button"
+              :disabled="!history.length"
+              aria-label="Deshacer"
+              @click="undo"
+            >
+              <AppIcon name="undo" /></button
+            ><button
+              class="icon-button"
+              :disabled="!future.length"
+              aria-label="Rehacer"
+              @click="redo"
+            >
+              <AppIcon name="redo" />
+            </button>
+          </div>
+          <div class="view-tabs" aria-label="Vista del circuito">
+            <button
+              :class="{ active: view === 'board' }"
+              :aria-pressed="view === 'board'"
+              @click="changeView('board')"
+            >
+              <AppIcon name="grid" :size="14" />Montaje</button
+            ><button
+              :class="{ active: view === '3d' }"
+              :aria-pressed="view === '3d'"
+              @click="changeView('3d')"
+            >
+              <AppIcon name="layers" :size="14" />3D</button
+            ><button
+              :class="{ active: view === 'schematic' }"
+              :aria-pressed="view === 'schematic'"
+              @click="changeView('schematic')"
+            >
+              <AppIcon name="circuit" :size="14" />Esquema
+            </button>
+          </div>
+          <button
+            class="mobile-inspector-toggle icon-button"
+            aria-label="Abrir inspector"
+            @click="showInspector = !showInspector"
+          >
+            <AppIcon name="layers" />
+          </button>
+        </div>
+        <section id="workbench-canvas" class="canvas-workspace" tabindex="-1">
+          <div class="canvas-context">
+            <span class="board-chip"
+              ><span class="small-board-icon"></span>Protoboard · 400 contactos</span
+            ><span class="canvas-status" :class="'tone-' + result.state"
+              ><i></i>{{ result.label }}</span
+            >
+          </div>
+          <SchematicView
+            v-if="view === 'schematic'"
+            :project="project"
+            :result="result"
+            :selected-uid="selectedUid"
+            @select="select"
+          />
+          <component
+            :is="viewComponent"
+            v-else
+            :project="project"
+            :result="result"
+            :selected-uid="selectedUid"
+            :tool="tool"
+            :placing="placing"
+            :wire-start="wireStart"
+            :zoom="zoom"
+            @select="select"
+            @move="movePart"
+            @hole="placeAt"
+            @hover="hoveredHole = $event"
+            @notice="message"
+          />
+          <div v-if="tool !== 'select'" class="placement-prompt">
+            <AppIcon :name="tool === 'wire' ? 'wire' : 'plus'" :size="16" /><span>{{
+              tool === 'wire'
+                ? wireStart
+                  ? 'Selecciona el segundo contacto'
+                  : 'Selecciona el primer contacto del cable'
+                : 'Elige un contacto para colocar la pieza'
+            }}</span
+            ><button aria-label="Cancelar colocación" @click="cancelTool">
+              <AppIcon name="close" :size="15" />
+            </button>
+          </div>
+          <div class="viewport-controls">
+            <button aria-label="Alejar" @click="zoomBy(-0.15)">
+              <AppIcon name="minus" :size="15" /></button
+            ><span>{{ Math.round(zoom * 100) }}%</span
+            ><button aria-label="Acercar" @click="zoomBy(0.15)">
+              <AppIcon name="plus" :size="15" /></button
+            ><button aria-label="Centrar vista" @click="zoom = 1">
+              <AppIcon name="fit" :size="15" />
+            </button>
+          </div>
+          <div class="board-caption">
+            <strong>{{ hovered ? hovered.id.toUpperCase() : 'BB-400' }}</strong
+            ><span>{{
+              hovered
+                ? 'Contactos comunes: ' + activePins
+                : 'Contactos de 2,54 mm · dos bancos aislados · rieles continuos'
+            }}</span>
+          </div>
+        </section>
+        <AnalysisPanel :result="result" :running="running" />
+      </main>
+      <div class="inspector-container">
+        <button
+          class="drawer-close icon-button"
+          aria-label="Cerrar inspector"
+          @click="showInspector = false"
+        >
+          <AppIcon name="close" /></button
+        ><ComponentInspector
+          :selected="selected"
+          :result="result"
+          @update="updatePart"
+          @remove="removeSelected"
+          @rotate="rotate"
+        />
+      </div>
+    </div>
+    <footer class="app-statusbar">
+      <span class="interaction-message" role="status" aria-live="polite"
+        ><AppIcon name="cursor" :size="12" />{{ notice }}</span
+      ><span>{{ project.components.length }} piezas <i>·</i> {{ project.wires.length }} cables</span
+      ><a href="https://github.com/uppy19d0/circuitforge-lab" target="_blank" rel="noreferrer"
+        >CircuitForge <span>v2.0</span></a
+      >
+    </footer>
+    <dialog ref="guide" class="guide-dialog">
+      <header>
+        <span><AppIcon name="book" />Guía del laboratorio</span
+        ><button class="icon-button" aria-label="Cerrar guía" @click="guide.close()">
+          <AppIcon name="close" />
+        </button>
+      </header>
+      <nav>
+        <button
+          v-for="(item, key) in lessons"
+          :key="key"
+          :class="{ active: lesson === key }"
+          @click="lesson = key"
+        >
+          {{ item.title }}
+        </button>
+      </nav>
+      <div class="guide-content">
+        <h2>{{ lessons[lesson].title }}</h2>
+        <p>{{ lessons[lesson].subtitle }}</p>
+        <code>{{ lessons[lesson].formula }}</code>
+        <article v-for="card in lessons[lesson].cards" :key="card.title">
+          <h3>{{ card.title }}</h3>
+          <p>{{ card.body }}</p>
+          <code v-if="card.code">{{ card.code }}</code>
+        </article>
+        <p class="guide-shortcuts">
+          V seleccionar · W cable · R rotar · flechas mover un contacto · Supr eliminar · Ctrl/⌘ Z
+          deshacer
+        </p>
+      </div>
+    </dialog>
+  </div>
+</template>
